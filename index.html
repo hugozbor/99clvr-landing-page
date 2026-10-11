@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>99CLOVER Maze Game</title>
+    <meta name="description" content="Beat the maze and win a 25% off discount.">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="99CLOVER Maze Game">
+    <meta property="og:description" content="Beat the maze and win a 25% off discount.">
+    <meta name="twitter:card" content="summary_large_image">
     <style>
         * {
             margin: 0;
@@ -119,11 +124,11 @@
 <body>
     <div id="stage">
         <div id="frame">
-            <img id="screen" alt="">
+            <img id="screen" alt="99CLOVER Maze Game" src="assets/START.jpg">
             <canvas id="game" width="2013" height="1731"></canvas>
         </div>
     </div>
-    <div id="scare"><img src="assets/JUMPSCARE.jpg" alt=""></div>
+    <div id="scare"></div>
     <div id="hint">MOVE YOUR CURSOR INTO THE BLUE TO START</div>
 
     <script src="levels.js"></script>
@@ -137,7 +142,7 @@
 
         const W = 2013, H = 1731;
         const NAVY = "#000080";
-        const START_IMG = "assets/START.jpg", WIN_IMG = "assets/WIN.jpg";
+        const START_IMG = "assets/START.jpg", WIN_IMG = "assets/WIN.jpg", SCARE_IMG = "assets/JUMPSCARE.jpg";
 
         // mask values per artboard pixel
         const EMPTY = 0, PATH = 1, GOAL = 2;
@@ -411,12 +416,17 @@
         window.addEventListener("contextmenu", (e) => e.preventDefault());
 
         async function init() {
+            // Added from script (not in the HTML) so link previews never pick it up as the thumbnail.
+            const scareImg = new Image();
+            scareImg.alt = "";
+            scareImg.src = SCARE_IMG;
+            scareEl.appendChild(scareImg);
+
             levelImgs = await Promise.all(window.LEVELS.map(loadImage));
             masks = levelImgs.map(buildMask);
             spawns = masks.map(findSpawn);
             await Promise.all([loadImage(START_IMG), loadImage(WIN_IMG)]);
             // Warm up the jump scare image without waiting for it (hidden tabs never finish decoding).
-            const scareImg = scareEl.querySelector("img");
             if (scareImg.decode) scareImg.decode().catch(() => {});
             showStart();
             requestAnimationFrame(tick);
