@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>We have moved to 99clover.com</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>99CLOVER Maze Game</title>
     <style>
         * {
             margin: 0;
@@ -11,77 +11,424 @@
             box-sizing: border-box;
         }
 
+        html, body {
+            height: 100%;
+            background: #000;
+            overflow: hidden;
+            overscroll-behavior: none;
+        }
+
         body {
             font-family: 'Arial', sans-serif;
-            background-color: #000000;
-            min-height: 100vh;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+        }
+
+        #stage {
+            position: fixed;
+            inset: 0;
             display: flex;
-            flex-direction: column;
-            justify-content: center;
             align-items: center;
-            color: white;
+            justify-content: center;
+            background: #000;
+        }
+
+        #stage.hide-cursor { cursor: none; }
+
+        /* All screens share the 2013x1731 artboard, scaled to fit with black bars. */
+        #frame {
+            position: relative;
+            width: min(100vw, 116.29vh);
+            aspect-ratio: 2013 / 1731;
+        }
+
+        @supports (height: 100dvh) {
+            #frame { width: min(100vw, 116.29dvh); }
+        }
+
+        #frame img, #frame canvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        #screen, #game { display: none; }
+
+        /* Black backdrop so the whole jump scare image is always visible, never cropped.
+           Stays in the page (opacity 0) so the image is already decoded when it flashes. */
+        #scare {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #scare.on { opacity: 1; }
+
+        #scare img {
+            width: 90vw;
+            height: 90vh;
+            object-fit: contain;
+        }
+
+        @supports (height: 100dvh) {
+            #scare img { height: 90dvh; }
+        }
+
+        #scare.on img { animation: shake 0.08s infinite; }
+
+        @keyframes shake {
+            0%   { transform: translate(0, 0); }
+            25%  { transform: translate(-8px, 6px); }
+            50%  { transform: translate(7px, -7px); }
+            75%  { transform: translate(-6px, -5px); }
+            100% { transform: translate(0, 0); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            #scare.on img { animation: none; }
+        }
+
+        #hint {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 14px;
             text-align: center;
-            padding: 2rem;
-        }
-
-        .container {
-            max-width: 800px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 1rem;
-        }
-
-        .image {
-            max-width: 40%;
-            height: auto;
-            border-radius: 8px;
-            margin-left: 20px;
-        }
-
-        .message {
-            font-size: 1.4rem;
+            color: #666;
+            font-size: 12px;
             font-weight: bold;
-            line-height: 1.4;
-            text-align: center;
+            letter-spacing: 0.12em;
+            opacity: 0;
+            transition: opacity 0.6s ease;
+            pointer-events: none;
         }
 
-        .visit-button {
-            background-color: rgba(128, 128, 128, 0.7);
-            color: white;
-            border: none;
-            padding: 0.7rem 1.5rem;
-            font-size: 1rem;
-            font-weight: 500;
-            border-radius: 6px;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-block;
-            transition: background-color 0.3s ease;
-        }
-
-        .visit-button:hover {
-            background-color: #a0a0a0;
-        }
-
-        @media (max-width: 768px) {
-            .message {
-                font-size: 1.2rem;
-            }
-            
-            .visit-button {
-                padding: 0.8rem 1.5rem;
-                font-size: 1rem;
-            }
-        }
+        #hint.on { opacity: 1; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <img src="logo.png" alt="99clover" class="image">
-        <div class="message">We have moved to<br>99clover.com</div>
-        <a href="https://99clover.com" class="visit-button">Visit now</a>
+    <div id="stage">
+        <div id="frame">
+            <img id="screen" alt="">
+            <canvas id="game" width="2013" height="1731"></canvas>
+        </div>
     </div>
+    <div id="scare"><img src="assets/JUMPSCARE.jpg" alt=""></div>
+    <div id="hint">MOVE YOUR CURSOR INTO THE BLUE TO START</div>
+
+    <script src="levels.js"></script>
+    <script>
+        const CONFIG = {
+            playerSize: 12,      // player square, in artboard pixels (the artboard is 2013x1731)
+            startRadius: 120,    // the cursor has to enter the blue within this distance of the start square
+            scareMs: 3000,       // how long the jump scare stays on screen
+            afterScare: "start", // "start" = back to the start screen and level 1, "level" = retry the same level
+        };
+
+        const W = 2013, H = 1731;
+        const NAVY = "#000080";
+        const START_IMG = "assets/START.jpg", WIN_IMG = "assets/WIN.jpg";
+
+        // mask values per artboard pixel
+        const EMPTY = 0, PATH = 1, GOAL = 2;
+        // probe() results
+        const OK = 0, OUT = 1, REACHED = 2;
+
+        const stage = document.getElementById("stage");
+        const frame = document.getElementById("frame");
+        const screenImg = document.getElementById("screen");
+        const canvas = document.getElementById("game");
+        const scareEl = document.getElementById("scare");
+        const hint = document.getElementById("hint");
+        const ctx = canvas.getContext("2d");
+
+        const scream = new Audio("assets/SCREAM.mp3");
+        const winSound = new Audio("assets/WIN.wav");
+        scream.preload = winSound.preload = "auto";
+
+        let state = "loading"; // loading | start | play | scare | win
+        let levelIndex = 0;
+        let levelImgs = [];
+        let masks = [];
+        let spawns = [];
+        let armed = false;     // false until the cursor enters the blue at the start of a level
+        const player = { x: 0, y: 0 };
+
+        function loadImage(src) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = () => reject(new Error("Could not load " + src));
+                img.src = src;
+            });
+        }
+
+        // Path = any opaque pixel that is not white (white is the baked-in "Level 1" label).
+        // Everything else counts as outside the maze.
+        function buildMask(img) {
+            const c = document.createElement("canvas");
+            c.width = W;
+            c.height = H;
+            const cx = c.getContext("2d", { willReadFrequently: true });
+            cx.drawImage(img, 0, 0);
+            const d = cx.getImageData(0, 0, W, H).data;
+            const m = new Uint8Array(W * H);
+            for (let i = 0, p = 0; i < m.length; i++, p += 4) {
+                const r = d[p], g = d[p + 1], b = d[p + 2], a = d[p + 3];
+                if (a < 128) continue;
+                if (r > 200 && g > 200 && b > 200) continue;
+                m[i] = (r > 200 && g < 80 && b < 80) ? GOAL : PATH;
+            }
+            return m;
+        }
+
+        function probe(m, px, py) {
+            const s = CONFIG.playerSize;
+            const x0 = Math.round(px), y0 = Math.round(py);
+            if (x0 < 0 || y0 < 0 || x0 + s > W || y0 + s > H) return OUT;
+            let goal = false;
+            for (let y = y0; y < y0 + s; y++) {
+                const row = y * W;
+                for (let x = x0; x < x0 + s; x++) {
+                    const v = m[row + x];
+                    if (v === EMPTY) return OUT;
+                    if (v === GOAL) goal = true;
+                }
+            }
+            return goal ? REACHED : OK;
+        }
+
+        // The start is the end of the maze farthest from the red goal: the bottom when the
+        // red is in the top half of the picture, the top when the red is in the bottom half.
+        function findSpawn(m) {
+            const s = CONFIG.playerSize;
+            let goalSum = 0, goalCount = 0;
+            for (let i = 0; i < m.length; i++) {
+                if (m[i] === GOAL) { goalSum += Math.floor(i / W); goalCount++; }
+            }
+            const fromBottom = goalCount === 0 || goalSum / goalCount < H / 2;
+            const dir = fromBottom ? -1 : 1;
+
+            let row = fromBottom ? H - 1 : 0;
+            const rowHasPath = (r) => {
+                for (let x = 0; x < W; x++) if (m[r * W + x] === PATH) return true;
+                return false;
+            };
+            while (row >= 0 && row < H && !rowHasPath(row)) row += dir;
+            row = Math.min(H - 1, Math.max(0, row));
+
+            let lo = 0;
+            while (lo < W && m[row * W + lo] !== PATH) lo++;
+            let hi = lo;
+            while (hi + 1 < W && m[row * W + hi + 1] === PATH) hi++;
+            const x = Math.round((lo + hi) / 2 - s / 2);
+
+            for (let i = 0; i < 100; i++) {
+                const y = fromBottom ? row - s - 2 - i : row + 2 + i;
+                if (probe(m, x, y) === OK) return { x, y };
+            }
+            return { x, y: fromBottom ? row - s - 2 : row + 2 };
+        }
+
+        function setCursorHidden(hidden) {
+            stage.classList.toggle("hide-cursor", hidden);
+        }
+
+        function loadLevel(i) {
+            levelIndex = i;
+            armed = false;
+            player.x = spawns[i].x;
+            player.y = spawns[i].y;
+            setCursorHidden(false);
+            hint.classList.toggle("on", i === 0);
+        }
+
+        function unlockAudio() {
+            // Playing inside the click is what lets the scream and win sound play later.
+            for (const a of [scream, winSound]) {
+                a.muted = true;
+                const reset = () => { a.pause(); a.currentTime = 0; a.muted = false; };
+                const p = a.play();
+                if (p && p.then) p.then(reset, () => { a.muted = false; });
+                else reset();
+            }
+        }
+
+        function showScreen(src) {
+            screenImg.src = src;
+            screenImg.style.display = "block";
+            canvas.style.display = "none";
+            setCursorHidden(false);
+            hint.classList.remove("on");
+        }
+
+        function showStart() {
+            state = "start";
+            showScreen(START_IMG);
+        }
+
+        function startGame() {
+            unlockAudio();
+            screenImg.style.display = "none";
+            canvas.style.display = "block";
+            loadLevel(0);
+            state = "play";
+        }
+
+        function nextLevel() {
+            if (levelIndex + 1 < masks.length) loadLevel(levelIndex + 1);
+            else win();
+        }
+
+        function win() {
+            state = "win";
+            showScreen(WIN_IMG);
+            winSound.currentTime = 0;
+            winSound.play().catch(() => {});
+        }
+
+        function jumpScare() {
+            state = "scare";
+            setCursorHidden(false);
+            hint.classList.remove("on");
+            scareEl.classList.add("on");
+            scream.currentTime = 0;
+            scream.volume = 1;
+            scream.play().catch(() => {});
+            setTimeout(endScare, CONFIG.scareMs);
+        }
+
+        function endScare() {
+            scareEl.classList.remove("on");
+            scream.pause();
+            scream.currentTime = 0;
+            if (CONFIG.afterScare === "level") {
+                loadLevel(levelIndex);
+                state = "play";
+            } else {
+                showStart();
+            }
+        }
+
+        // Walk the player in small steps so a fast mouse move can't skip over the edge of the path.
+        function move(dx, dy) {
+            const dist = Math.hypot(dx, dy);
+            if (!dist) return OK;
+            const n = Math.ceil(dist / 2);
+            const sx = dx / n, sy = dy / n;
+            const m = masks[levelIndex];
+            for (let i = 0; i < n; i++) {
+                player.x += sx;
+                player.y += sy;
+                const r = probe(m, player.x, player.y);
+                if (r !== OK) return r;
+            }
+            return OK;
+        }
+
+        // x, y = top-left of the square in artboard pixels, centred on the cursor.
+        function pointerAt(x, y) {
+            if (state !== "play") return;
+
+            if (!armed) {
+                const sp = spawns[levelIndex];
+                const nearStart = Math.hypot(x - sp.x, y - sp.y) <= CONFIG.startRadius;
+                if (nearStart && probe(masks[levelIndex], x, y) === OK) {
+                    armed = true;
+                    player.x = x;
+                    player.y = y;
+                    setCursorHidden(true);
+                    hint.classList.remove("on");
+                }
+                return;
+            }
+
+            const r = move(x - player.x, y - player.y);
+            if (r === OUT) jumpScare();
+            else if (r === REACHED) nextLevel();
+        }
+
+        function onPointer(e) {
+            const rect = frame.getBoundingClientRect();
+            const s = CONFIG.playerSize;
+            const x = (e.clientX - rect.left) / rect.width * W - s / 2;
+            const y = (e.clientY - rect.top) / rect.height * H - s / 2;
+            pointerAt(x, y);
+        }
+
+        function draw() {
+            ctx.fillStyle = "#000";
+            ctx.fillRect(0, 0, W, H);
+            ctx.drawImage(levelImgs[levelIndex], 0, 0);
+            ctx.fillStyle = NAVY;
+            const s = CONFIG.playerSize;
+            ctx.fillRect(Math.round(player.x), Math.round(player.y), s, s);
+        }
+
+        function tick() {
+            requestAnimationFrame(tick);
+            if (state === "play") draw();
+        }
+
+        stage.addEventListener("click", () => {
+            if (state === "start") startGame();
+        });
+
+        window.addEventListener("keydown", (e) => {
+            if (state === "start" && (e.code === "Enter" || e.code === "Space")) {
+                e.preventDefault();
+                startGame();
+            }
+        });
+
+        // Mouse only: the square follows the cursor, no buttons held. Coalesced events give
+        // every tiny mouse step between frames so nothing can be skipped.
+        window.addEventListener("pointermove", (e) => {
+            const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+            for (const ev of (events.length ? events : [e])) onPointer(ev);
+        });
+
+        // A finger has no hover, so touch works as "touch the start, slide to the end".
+        // Lifting the finger sends the square back to the start of the level.
+        window.addEventListener("pointerdown", (e) => {
+            if (e.pointerType !== "mouse") onPointer(e);
+        });
+
+        window.addEventListener("pointerup", (e) => {
+            if (e.pointerType !== "mouse" && state === "play" && armed) loadLevel(levelIndex);
+        });
+
+        window.addEventListener("contextmenu", (e) => e.preventDefault());
+
+        async function init() {
+            levelImgs = await Promise.all(window.LEVELS.map(loadImage));
+            masks = levelImgs.map(buildMask);
+            spawns = masks.map(findSpawn);
+            await Promise.all([loadImage(START_IMG), loadImage(WIN_IMG)]);
+            // Warm up the jump scare image without waiting for it (hidden tabs never finish decoding).
+            const scareImg = scareEl.querySelector("img");
+            if (scareImg.decode) scareImg.decode().catch(() => {});
+            showStart();
+            requestAnimationFrame(tick);
+        }
+
+        init().catch((err) => {
+            console.error(err);
+            document.body.insertAdjacentHTML(
+                "beforeend",
+                '<p style="position:fixed;inset:0;display:grid;place-items:center;color:#fff;font:bold 16px Arial">Something went wrong loading the game.</p>'
+            );
+        });
+    </script>
 </body>
-</html> 
+</html>
